@@ -1,0 +1,109 @@
+services:
+  backend-web-api:
+    image: check-check-backend:latest
+    environment:
+      POSTGRESQL_CONNECTION_STRING: postgresql://${BE_DB_USER}:${BE_DB_PASSWORD}@backend-db:5432/${BE_DB_NAME}
+      RECEIPTS_INN:
+      RECEIPTS_PASSWORD:
+      RECEIPTS_CLIENT_SECRET:
+      JWT_SECRET:
+    networks:
+      - main-network
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend-db:
+        condition: service_healthy
+      backend-migrator:
+        condition: service_completed_successfully
+
+  backend-migrator:
+    image: check-check-backend-init-db:latest
+    environment:
+      POSTGRESQL_CONNECTION_STRING: postgresql://${BE_DB_USER}:${BE_DB_PASSWORD}@backend-db:5432/${BE_DB_NAME}
+    networks:
+      - main-network
+    depends_on:
+      backend-db:
+        condition: service_healthy
+
+  backend-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${BE_DB_NAME}
+      POSTGRES_USER: ${BE_DB_USER}
+      POSTGRES_PASSWORD: ${BE_DB_PASSWORD}
+    volumes:
+      - be-pg:/var/lib/postgresql/data
+    networks:
+      - main-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BE_DB_USER} -d ${BE_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  auth-web-api:
+    build:
+      context: ./auth/
+      dockerfile: Dockerfile
+    image: check-check-auth:latest
+    ports:
+      - "5183:5183"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5183
+      ConnectionStrings__PostgreSQL: Host=auth-db;Port=5432;Database=${AUTH_DB_NAME};Username=${AUTH_DB_USER};Password=${AUTH_DB_PASSWORD}
+      Jwt__Secret: ${JWT_SECRET}
+      Jwt__ExpirySeconds: ${JWT_EXPIRY_SECONDS}
+      BackendClient__BaseAddress: "http://backend-web-api:8080"
+      ApiKey: ${AUTH_API_KEY}
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      auth-migrator:
+        condition: service_completed_successfully
+      backend-web-api:
+        condition: service_started
+    networks:
+      - main-network
+
+  auth-migrator:
+    build:
+      context: ./auth/
+      dockerfile: Dockerfile.migrator
+    environment:
+      ConnectionStrings__PostgreSQL: Host=auth-db;Port=5432;Database=${AUTH_DB_NAME};Username=${AUTH_DB_USER};Password=${AUTH_DB_PASSWORD}
+      Jwt__Secret: ${JWT_SECRET}
+      Jwt__ExpirySeconds: ${JWT_EXPIRY_SECONDS}
+      BackendClient__BaseAddress: "http://backend-web-api:8080"
+      ApiKey: ${AUTH_API_KEY}
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    networks:
+      - main-network
+
+  auth-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${AUTH_DB_NAME}
+      POSTGRES_USER: ${AUTH_DB_USER}
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD}
+    volumes:
+      - auth-pg:/var/lib/postgresql/data
+    networks:
+      - main-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AUTH_DB_USER} -d ${AUTH_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  be-pg:
+  auth-pg:
+
+networks:
+  main-network:
+    driver: bridge
